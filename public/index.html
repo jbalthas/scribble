@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scribble Party</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="join-screen" class="screen join-screen">
+    <div class="card join-card">
+      <h1 class="logo">Scribble<span>Party</span></h1>
+      <p class="tagline">Draw, guess, and get rated by your friends.</p>
+      <label class="field">Your name
+        <input id="name-input" maxlength="20" autocomplete="off" placeholder="Enter your name">
+      </label>
+      <button id="create-btn" class="btn primary big">Create private room</button>
+      <div class="divider"><span>or join one</span></div>
+      <div class="row">
+        <input id="code-input" maxlength="4" placeholder="CODE" autocomplete="off">
+        <button id="join-btn" class="btn">Join</button>
+      </div>
+      <p id="join-error" class="error"></p>
+    </div>
+  </main>
+
+  <main id="game-screen" class="screen" hidden>
+    <header class="topbar card">
+      <div id="timer" class="timer">0</div>
+      <div class="round" id="round-label"></div>
+      <div class="word" id="word-display"></div>
+      <button id="invite-btn" class="btn small">Room <b id="room-code"></b> · Copy invite</button>
+    </header>
+
+    <div class="layout">
+      <aside class="players card" id="player-list"></aside>
+
+      <section class="stage">
+        <div id="panel" class="panel card" hidden></div>
+        <div id="canvas-area" class="canvas-area">
+          <div class="canvas-wrap">
+            <canvas id="canvas" width="800" height="600"></canvas>
+            <div id="overlay" class="overlay" hidden></div>
+          </div>
+          <div id="toolbar" class="toolbar card" hidden>
+            <div id="colors" class="colors"></div>
+            <div id="sizes" class="sizes"></div>
+            <div class="tools">
+              <button class="tool active" data-tool="pen" title="Brush">✏️</button>
+              <button class="tool" data-tool="eraser" title="Eraser">🧽</button>
+              <button class="tool" data-tool="fill" title="Fill">🪣</button>
+              <button id="undo-btn" class="tool" title="Undo">↩️</button>
+              <button id="clear-btn" class="tool" title="Clear">🗑️</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="chat card">
+        <div id="chat-log" class="chat-log"></div>
+        <form id="chat-form">
+          <input id="chat-input" maxlength="100" autocomplete="off" placeholder="Type your guess here...">
+        </form>
+      </aside>
+    </div>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="client.js"></script>
+</body>
+</html>
