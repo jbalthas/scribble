@@ -129,7 +129,6 @@ input:focus, textarea:focus { border-color: var(--bg-2); }
   box-shadow: 0 4px 0 rgba(0, 0, 0, 0.15);
 }
 canvas { display: block; width: 100%; height: auto; aspect-ratio: 4 / 3; background: #fff; touch-action: none; }
-canvas.can-draw { cursor: crosshair; }
 
 .overlay {
   position: absolute; inset: 0;
@@ -140,6 +139,14 @@ canvas.can-draw { cursor: crosshair; }
 .overlay h2, .overlay h3 { margin: 0; }
 .overlay p { margin: 0; opacity: 0.85; }
 .choices { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.choice { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 140px; color: #fff; }
+.choice small { font-weight: 700; opacity: 0.9; }
+.choice.easy { background: var(--primary); }
+.choice.medium { background: var(--accent); }
+.choice.hard { background: #dc2626; }
+.difficulty { font-size: 0.85rem; font-weight: 700; color: var(--muted); }
+.cursor-pick { display: flex; align-items: center; gap: 6px; font-weight: 700; color: var(--muted); }
+.cursor-pick select { font: inherit; padding: 6px 8px; border: 2px solid var(--line); border-radius: 10px; background: #fff; }
 .artist-summary { font-size: 1.05rem; }
 .turn-results { display: flex; flex-direction: column; gap: 4px; min-width: 220px; }
 .turn-row { display: flex; justify-content: space-between; gap: 24px; font-weight: 700; }
@@ -216,6 +223,15 @@ canvas.can-draw { cursor: crosshair; }
 .gallery img, .gallery .noimg { width: 100%; aspect-ratio: 4 / 3; display: block; object-fit: cover; }
 .gallery .noimg { display: grid; place-items: center; color: var(--muted); background: #f3f4f6; }
 .gallery figcaption { padding: 8px 10px; font-size: 0.9rem; }
+.gallery figure.voted-best { border-color: var(--gold); }
+.gallery figure.voted-worst { border-color: #92400e; }
+.gallery figure.voted-best.voted-worst { border-color: var(--bg-2); }
+.vote-btns { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.vote-btns .active-best { background: var(--gold); color: #fff; }
+.vote-btns .active-worst { background: #92400e; color: #fff; }
+.award { margin-top: 4px; font-weight: 900; }
+.award.best { color: #a16207; }
+.award.worst { color: #92400e; }
 
 /* ---------- Responsive ---------- */
 

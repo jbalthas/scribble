@@ -21,6 +21,8 @@ let state = null;
 let myWord = '';
 let choices = [];
 let phaseKey = '';
+let myVotes = {};
+const DIFFICULTY_LABELS = { easy: '🟢 Easy', medium: '🟡 Medium', hard: '🔴 Hard' };
 let endAt = 0;
 
 const me = () => state?.players.find((p) => p.id === socket.id);
@@ -69,7 +71,10 @@ $('invite-btn').addEventListener('click', async () => {
 socket.on('schema', (s) => { schema = s; });
 socket.on('choices', (c) => { choices = c; if (state) render(); });
 socket.on('yourWord', (w) => { myWord = w; if (state) render(); });
-socket.on('chat', addChat);
+socket.on('chat', (msg) => {
+  addChat(msg);
+  if (msg.kind === 'correct') ding();
+});
 socket.on('draw', (op) => { ops.push(op); applyOp(op); });
 socket.on('canvas', (list) => { ops = list; redraw(); });
 socket.on('requestSnapshot', (turn) => {
@@ -91,6 +96,7 @@ function render() {
   const key = `${state.phase}:${state.round}:${state.drawerId}`;
   if (key !== phaseKey) {
     phaseKey = key;
+    myVotes = {};
     if (state.phase === 'choosing' || state.phase === 'lobby') {
       myWord = '';
       ops = [];
@@ -103,6 +109,7 @@ function render() {
   renderPlayers();
   renderStage();
   renderChatInput();
+  updateCursor();
 }
 
 function renderTopbar() {
@@ -110,7 +117,7 @@ function renderTopbar() {
   $('room-code').textContent = state.code;
   $('timer').hidden = phase === 'lobby' || phase === 'gameEnd';
   $('round-label').textContent =
-    phase === 'lobby' ? 'Lobby' : phase === 'gameEnd' ? 'Game over' : `Round ${Math.min(round, rounds)} of ${rounds}`;
+    phase === 'lobby' ? 'Lobby' : phase === 'gameEnd' ? 'Game over' : phase === 'voting' ? 'Voting' : `Round ${Math.min(round, rounds)} of ${rounds}`;
 
   const wd = $('word-display');
   wd.replaceChildren();
@@ -126,8 +133,11 @@ function renderTopbar() {
         h('sup', {}, hint.replace(/\s/g, '').length),
       );
     }
+    wd.append(h('span', { class: 'difficulty' }, DIFFICULTY_LABELS[state.difficulty]));
   } else if (phase === 'turnEnd') {
     wd.append(h('span', { class: 'word-label' }, 'The word was'), h('span', { class: 'word-text' }, word));
+  } else if (phase === 'voting') {
+    wd.append(h('span', { class: 'word-label' }, 'Vote on the drawings!'));
   }
 }
 
@@ -140,6 +150,7 @@ function renderPlayers() {
       const badges = [];
       if (p.id === state.hostId) badges.push('👑');
       if (p.id === state.drawerId && state.phase !== 'lobby') badges.push('✏️');
+      if (state.voted.includes(p.id)) badges.push('✅');
       return h('div', { class: `player ${p.guessed ? 'guessed' : ''} ${p.id === socket.id ? 'me' : ''}` },
         state.phase === 'lobby' ? null : h('span', { class: 'rank' }, `#${i + 1}`),
         h('span', { class: 'avatar', style: `background:${p.color}` }, p.name[0].toUpperCase()),
@@ -155,12 +166,12 @@ function renderPlayers() {
 
 function renderStage() {
   const { phase } = state;
-  const panelPhase = phase === 'lobby' || phase === 'gameEnd';
+  const panelPhase = phase === 'lobby' || phase === 'voting' || phase === 'gameEnd';
   $('panel').hidden = !panelPhase;
   $('canvas-area').hidden = panelPhase;
   $('toolbar').hidden = !(phase === 'drawing' && isDrawer());
-  canvas.classList.toggle('can-draw', phase === 'drawing' && isDrawer());
   if (phase === 'lobby') renderLobby();
+  else if (phase === 'voting') renderVoting();
   else if (phase === 'gameEnd') renderGameEnd();
   else renderOverlay();
 }
@@ -188,8 +199,10 @@ function renderOverlay() {
     if (isDrawer()) {
       ov.append(
         h('h2', {}, 'Choose a word'),
-        h('div', { class: 'choices' }, choices.map((w, i) =>
-          h('button', { class: 'btn primary', onclick: () => socket.emit('choose', i) }, w))),
+        h('div', { class: 'choices' }, choices.map((c, i) =>
+          h('button', { class: `btn choice ${c.difficulty}`, onclick: () => socket.emit('choose', i) },
+            h('span', {}, c.word),
+            h('small', {}, `${DIFFICULTY_LABELS[c.difficulty]} · ${multiplierLabel(c.difficulty)}`)))),
       );
     } else {
       ov.append(h('h2', {}, `${playerName(state.drawerId)} is choosing a word…`));
@@ -205,6 +218,11 @@ function renderOverlay() {
           h('span', { class: p.turnPoints > 0 ? 'plus' : 'zero' }, p.turnPoints > 0 ? `+${p.turnPoints}` : '0')))),
     );
   }
+}
+
+function multiplierLabel(difficulty) {
+  const pct = { easy: 100, medium: state.settings.mediumWordPercent, hard: state.settings.hardWordPercent }[difficulty];
+  return `×${pct / 100} pts`;
 }
 
 function artistSummary(a) {
@@ -320,6 +338,40 @@ function renderEmphasis(s) {
   );
 }
 
+/* ---------- Voting panel ---------- */
+
+function renderVoting() {
+  lobbyBuilt = false;
+  const { bestVote, worstVote, bestVotePoints, worstVotePoints } = state.settings;
+  const vote = (kind, index) => {
+    myVotes[kind] = index;
+    socket.emit('vote', { kind, index });
+    renderVoting();
+  };
+  const prompts = [];
+  if (bestVote) prompts.push(`🏆 best drawing${bestVotePoints ? ` (+${bestVotePoints})` : ''}`);
+  if (worstVote) prompts.push(`💩 worst drawing${worstVotePoints ? ` (−${worstVotePoints})` : ''}`);
+  $('panel').replaceChildren(
+    h('div', { class: 'lobby-head' },
+      h('div', {},
+        h('h2', {}, 'Vote!'),
+        h('p', {}, `Pick the ${prompts.join(' and the ')}. ${state.voted.length}/${state.players.length} done.`))),
+    h('div', { class: 'gallery' }, state.gallery.map((g, i) => {
+      const own = g.drawerId === socket.id;
+      return h('figure', { class: `${myVotes.best === i ? 'voted-best' : ''} ${myVotes.worst === i ? 'voted-worst' : ''}` },
+        g.image ? h('img', { src: g.image, alt: g.word }) : h('div', { class: 'noimg' }, 'No image'),
+        h('figcaption', {},
+          h('strong', {}, g.word),
+          h('span', {}, ` by ${g.drawerName}`),
+          h('div', { class: 'vote-btns' },
+            own ? h('small', {}, 'Your drawing') : [
+              bestVote ? h('button', { class: `btn small ${myVotes.best === i ? 'active-best' : ''}`, onclick: () => vote('best', i) }, '🏆 Best') : null,
+              worstVote ? h('button', { class: `btn small ${myVotes.worst === i ? 'active-worst' : ''}`, onclick: () => vote('worst', i) }, '💩 Worst') : null,
+            ])));
+    })),
+  );
+}
+
 /* ---------- Game end panel ---------- */
 
 function renderGameEnd() {
@@ -345,11 +397,13 @@ function renderGameEnd() {
       : '',
     gallery.length ? h('h3', {}, 'Gallery') : '',
     h('div', { class: 'gallery' }, gallery.map((g) =>
-      h('figure', {},
+      h('figure', { class: `${g.best ? 'voted-best' : ''} ${g.worst ? 'voted-worst' : ''}` },
         g.image ? h('img', { src: g.image, alt: g.word }) : h('div', { class: 'noimg' }, 'No image'),
         h('figcaption', {},
           h('strong', {}, g.word),
-          h('span', {}, ` by ${g.drawerName}`))))),
+          h('span', {}, ` by ${g.drawerName}`),
+          g.best ? h('div', { class: 'award best' }, `🏆 Best drawing (${g.bestVotes} votes)`) : null,
+          g.worst ? h('div', { class: 'award worst' }, `💩 Worst drawing (${g.worstVotes} votes)`) : null)))),
   );
 }
 
@@ -480,6 +534,7 @@ $('colors').append(...COLORS.map((c) => h('button', {
   onclick: (e) => {
     color = c;
     if (tool === 'eraser') selectTool('pen');
+    updateCursor();
     document.querySelectorAll('.swatch').forEach((s) => s.classList.remove('active'));
     e.currentTarget.classList.add('active');
   },
@@ -488,6 +543,7 @@ $('sizes').append(...SIZES.map((s) => h('button', {
   class: `size ${s === size ? 'active' : ''}`, title: `${s}px`,
   onclick: (e) => {
     size = s;
+    updateCursor();
     document.querySelectorAll('.size').forEach((b) => b.classList.remove('active'));
     e.currentTarget.classList.add('active');
   },
@@ -495,6 +551,7 @@ $('sizes').append(...SIZES.map((s) => h('button', {
 
 function selectTool(t) {
   tool = t;
+  updateCursor();
   document.querySelectorAll('[data-tool]').forEach((b) => b.classList.toggle('active', b.dataset.tool === t));
 }
 document.querySelectorAll('[data-tool]').forEach((b) => b.addEventListener('click', () => selectTool(b.dataset.tool)));
@@ -557,6 +614,68 @@ function endStroke() {
 }
 canvas.addEventListener('pointerup', endStroke);
 canvas.addEventListener('pointercancel', endStroke);
+
+/* ---------- Correct-guess cue ---------- */
+
+let audio = null;
+function ding() {
+  try {
+    audio ??= new AudioContext();
+    const t = audio.currentTime;
+    [880, 1320].forEach((freq, i) => {
+      const osc = audio.createOscillator();
+      const gain = audio.createGain();
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.15, t + i * 0.1);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.1 + 0.35);
+      osc.connect(gain).connect(audio.destination);
+      osc.start(t + i * 0.1);
+      osc.stop(t + i * 0.1 + 0.35);
+    });
+  } catch {}
+}
+
+/* ---------- Cursor picker ---------- */
+
+const svgCursor = (svg, x, y) => `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${x} ${y}, crosshair`;
+const emojiCursor = (emoji, x, y) =>
+  svgCursor(`<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><text y="26" font-size="26">${emoji}</text></svg>`, x, y);
+
+const CURSORS = {
+  crosshair: { label: '➕ Crosshair', css: () => 'crosshair' },
+  preview: {
+    label: '⚪ Brush outline',
+    css: () => {
+      if (tool === 'fill') return emojiCursor('🪣', 4, 24);
+      const d = Math.min(120, Math.max(4, Math.round((size * canvas.clientWidth) / W)));
+      const r = d / 2 + 2;
+      const fill = tool === 'eraser' ? '#ffffff' : color;
+      return svgCursor(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${r * 2}" height="${r * 2}"><circle cx="${r}" cy="${r}" r="${d / 2}" fill="${fill}" fill-opacity="0.5" stroke="#000" stroke-width="1"/><circle cx="${r}" cy="${r}" r="${d / 2 + 1}" fill="none" stroke="#fff" stroke-width="1"/></svg>`,
+        r, r);
+    },
+  },
+  pencil: { label: '✏️ Pencil', css: () => emojiCursor('✏️', 2, 28) },
+  brush: { label: '🖌️ Paintbrush', css: () => emojiCursor('🖌️', 2, 28) },
+  finger: { label: '👆 Finger', css: () => emojiCursor('👆', 10, 2) },
+  wand: { label: '🪄 Magic wand', css: () => emojiCursor('🪄', 2, 28) },
+};
+let cursorChoice = 'crosshair';
+try { if (CURSORS[localStorage.getItem('scribble-cursor')]) cursorChoice = localStorage.getItem('scribble-cursor'); } catch {}
+
+const cursorSelect = $('cursor-select');
+cursorSelect.append(...Object.entries(CURSORS).map(([k, c]) => h('option', { value: k }, c.label)));
+cursorSelect.value = cursorChoice;
+cursorSelect.addEventListener('change', () => {
+  cursorChoice = cursorSelect.value;
+  try { localStorage.setItem('scribble-cursor', cursorChoice); } catch {}
+  updateCursor();
+});
+
+function updateCursor() {
+  canvas.style.cursor = canDraw() ? CURSORS[cursorChoice].css() : '';
+}
+addEventListener('resize', updateCursor);
 
 /* ---------- Util ---------- */
 

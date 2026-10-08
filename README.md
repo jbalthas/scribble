@@ -30,3 +30,7 @@ Open http://localhost:3000, create a room, and use **Copy invite** to share the 
 
 Artist max per turn = the three artist weights summed, regardless of player count.
 Presets: **Guesser Focus**, **Balanced**, **Artist Spotlight** (default). The lobby bar shows the artist vs. guesser split.
+
+Word choices run easy → hard. Medium and hard words multiply both guesser and artist points (`Medium/Hard word points %`, default 125% / 150%). Custom words count as medium.
+
+**End-of-game voting** (lobby settings): players vote for the best and/or worst drawing (not their own). The top-voted artist gets `Best drawing points` added or `Worst drawing penalty` subtracted; set either to 0 for no points. If drawings tie, they all win.

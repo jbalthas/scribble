@@ -12,6 +12,12 @@ export interface Settings {
   drawerAllGuessedBonus: number;
   customWords: string;
   customWordsOnly: boolean;
+  mediumWordPercent: number;
+  hardWordPercent: number;
+  bestVote: boolean;
+  bestVotePoints: number;
+  worstVote: boolean;
+  worstVotePoints: number;
 }
 
 type KeysOfType<T> = { [K in keyof Settings]: Settings[K] extends T ? K : never }[keyof Settings];
@@ -58,7 +64,23 @@ export const SETTING_FIELDS: SettingField[] = [
     type: 'text', key: 'customWords', label: 'Custom words', group: 'Words', maxLength: 5000,
     help: 'Comma or newline separated.',
   },
-  { type: 'boolean', key: 'customWordsOnly', label: 'Use custom words only', group: 'Words' },
+  { type: 'boolean', key: 'customWordsOnly', label: 'Use custom words only', group: 'Words', help: 'Custom words count as medium.' },
+  {
+    type: 'number', key: 'mediumWordPercent', label: 'Medium word points %', group: 'Words', min: 100, max: 300, step: 5,
+    help: 'Multiplies guesser and artist points. Easy words are 100%.',
+  },
+  { type: 'number', key: 'hardWordPercent', label: 'Hard word points %', group: 'Words', min: 100, max: 300, step: 5 },
+
+  { type: 'boolean', key: 'bestVote', label: 'Vote for best drawing', group: 'End-of-game voting' },
+  {
+    type: 'number', key: 'bestVotePoints', label: 'Best drawing points', group: 'End-of-game voting', min: 0, max: 500, step: 10,
+    help: 'Added to the winning artist. 0 = bragging rights only.',
+  },
+  { type: 'boolean', key: 'worstVote', label: 'Vote for worst drawing', group: 'End-of-game voting' },
+  {
+    type: 'number', key: 'worstVotePoints', label: 'Worst drawing penalty', group: 'End-of-game voting', min: 0, max: 500, step: 10,
+    help: 'Subtracted from the losing artist. 0 = just for laughs.',
+  },
 ];
 
 export const PRESETS: { id: string; label: string; description: string; values: Partial<Settings> }[] = [
@@ -96,6 +118,12 @@ export const DEFAULT_SETTINGS: Settings = {
   drawerAllGuessedBonus: 100,
   customWords: '',
   customWordsOnly: false,
+  mediumWordPercent: 125,
+  hardWordPercent: 150,
+  bestVote: true,
+  bestVotePoints: 100,
+  worstVote: false,
+  worstVotePoints: 50,
 };
 
 export function sanitizeSettings(input: Record<string, unknown>, base: Settings): Settings {

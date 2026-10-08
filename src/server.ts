@@ -52,6 +52,7 @@ io.on('connection', (socket) => {
   socket.on('undo', () => room?.undo(socket.id));
   socket.on('clear', () => room?.clear(socket.id));
   socket.on('chat', (text: unknown) => room?.chat(socket.id, text));
+  socket.on('vote', (data: unknown) => room?.vote(socket.id, data));
   socket.on('snapshot', (data: unknown) => room?.snapshot(socket.id, data));
 
   socket.on('disconnect', () => {

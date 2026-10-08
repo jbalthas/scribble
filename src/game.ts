@@ -1,8 +1,8 @@
 import type { Server, Socket } from 'socket.io';
 import { DEFAULT_SETTINGS, sanitizeSettings, type Settings } from './settings';
-import { DEFAULT_WORDS } from './words';
+import { DIFFICULTIES, WORDS, type Difficulty } from './words';
 
-export type Phase = 'lobby' | 'choosing' | 'drawing' | 'turnEnd' | 'gameEnd';
+export type Phase = 'lobby' | 'choosing' | 'drawing' | 'turnEnd' | 'voting' | 'gameEnd';
 
 interface Player {
   id: string;
@@ -29,7 +29,18 @@ interface GalleryEntry {
   drawerName: string;
   word: string;
   image: string | null;
+  bestVotes: number;
+  worstVotes: number;
+  best: boolean;
+  worst: boolean;
 }
+
+interface WordChoice {
+  word: string;
+  difficulty: Difficulty;
+}
+
+type VoteKind = 'best' | 'worst';
 
 interface ArtistAward {
   guessed: number;
@@ -41,6 +52,7 @@ interface ArtistAward {
 
 const AVATAR_COLORS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#3b82f6', '#8b5cf6', '#ec4899', '#a16207', '#64748b'];
 const TURN_END_MS = 6000;
+const VOTE_MS = 45000;
 const MAX_OPS = 30000;
 const MAX_IMAGE_LENGTH = 400_000;
 
@@ -83,13 +95,15 @@ export class Room {
   private drawQueue: string[] = [];
   private drawerId = '';
   private word = '';
-  private choices: string[] = [];
+  private difficulty: Difficulty = 'medium';
+  private choices: WordChoice[] = [];
   private revealed = new Set<number>();
   private ops: DrawOp[] = [];
   private artistAward: ArtistAward | null = null;
   private gallery: GalleryEntry[] = [];
   private currentEntry: GalleryEntry | null = null;
   private usedWords = new Set<string>();
+  private votes = new Map<string, Partial<Record<VoteKind, number>>>();
   private phaseEndsAt = 0;
   private timers: NodeJS.Timeout[] = [];
   private colorIndex = 0;
@@ -128,6 +142,12 @@ export class Room {
     if (this.hostId === id) {
       this.hostId = this.players[0].id;
       this.system(`${this.players[0].name} is now the host`);
+    }
+    if (this.phase === 'voting') {
+      this.votes.delete(id);
+      if (this.players.every((q) => this.hasVoted(q.id))) this.finishVoting();
+      else this.broadcastState();
+      return;
     }
     const inGame = this.phase !== 'lobby' && this.phase !== 'gameEnd';
     if (inGame && this.players.length < 2) {
@@ -171,7 +191,9 @@ export class Room {
   chooseWord(id: string, index: unknown): void {
     if (this.phase !== 'choosing' || id !== this.drawerId) return;
     const i = typeof index === 'number' ? index : 0;
-    this.word = this.choices[i] ?? this.choices[0];
+    const choice = this.choices[i] ?? this.choices[0];
+    this.word = choice.word;
+    this.difficulty = choice.difficulty;
     this.startDrawing();
   }
 
@@ -221,6 +243,16 @@ export class Room {
       return;
     }
     this.io.to(this.code).emit('chat', { kind: 'normal', name: p.name, color: p.color, text });
+  }
+
+  vote(id: string, data: unknown): void {
+    if (this.phase !== 'voting' || !this.player(id) || typeof data !== 'object' || data === null) return;
+    const { kind, index } = data as Record<string, unknown>;
+    if (!((kind === 'best' && this.settings.bestVote) || (kind === 'worst' && this.settings.worstVote))) return;
+    if (typeof index !== 'number' || !this.gallery[index] || this.gallery[index].drawerId === id) return;
+    this.votes.set(id, { ...this.votes.get(id), [kind]: index });
+    if (this.players.every((p) => this.hasVoted(p.id))) this.finishVoting();
+    else this.broadcastState();
   }
 
   snapshot(id: string, data: unknown): void {
@@ -284,6 +316,10 @@ export class Room {
       drawerName: this.player(this.drawerId)?.name ?? '?',
       word: this.word,
       image: null,
+      bestVotes: 0,
+      worstVotes: 0,
+      best: false,
+      worst: false,
     };
     this.gallery.push(this.currentEntry);
 
@@ -309,7 +345,7 @@ export class Room {
   private correctGuess(p: Player): void {
     const { guessMaxPoints, guessMinPoints, drawTime } = this.settings;
     const remaining = Math.max(0, this.phaseEndsAt - Date.now()) / (drawTime * 1000);
-    const points = Math.round(guessMinPoints + (guessMaxPoints - guessMinPoints) * remaining);
+    const points = Math.round((guessMinPoints + (guessMaxPoints - guessMinPoints) * remaining) * this.multiplier());
     p.score += points;
     p.turnPoints += points;
     p.guessed = true;
@@ -345,12 +381,13 @@ export class Room {
     const guessed = guessers.filter((p) => p.guessed).length;
     const { drawerSpeedPoints, drawerSharePoints, drawerAllGuessedBonus } = this.settings;
     const avgSpeed = guessers.reduce((sum, p) => sum + p.guessSpeed, 0) / guessers.length;
+    const m = this.multiplier();
     const award: ArtistAward = {
       guessed,
       guessers: guessers.length,
-      speed: Math.round(drawerSpeedPoints * avgSpeed),
-      share: Math.round((drawerSharePoints * guessed) / guessers.length),
-      bonus: guessed === guessers.length ? drawerAllGuessedBonus : 0,
+      speed: Math.round(drawerSpeedPoints * avgSpeed * m),
+      share: Math.round(((drawerSharePoints * guessed) / guessers.length) * m),
+      bonus: guessed === guessers.length ? Math.round(drawerAllGuessedBonus * m) : 0,
     };
     const total = award.speed + award.share + award.bonus;
     drawer.score += total;
@@ -358,10 +395,55 @@ export class Room {
     this.artistAward = award;
   }
 
+  private multiplier(): number {
+    if (this.difficulty === 'hard') return this.settings.hardWordPercent / 100;
+    if (this.difficulty === 'medium') return this.settings.mediumWordPercent / 100;
+    return 1;
+  }
+
   private endGame(): void {
     this.clearTimers();
-    this.phase = 'gameEnd';
     this.drawerId = '';
+    const { bestVote, worstVote } = this.settings;
+    // Needs two different artists so everyone has someone else's drawing to vote for.
+    if ((bestVote || worstVote) && new Set(this.gallery.map((e) => e.drawerId)).size >= 2) {
+      this.phase = 'voting';
+      this.votes.clear();
+      this.setPhaseTimer(VOTE_MS, () => this.finishVoting());
+    } else {
+      this.phase = 'gameEnd';
+    }
+    this.broadcastState();
+  }
+
+  private hasVoted(id: string): boolean {
+    const v = this.votes.get(id);
+    return !!v && (!this.settings.bestVote || v.best !== undefined) && (!this.settings.worstVote || v.worst !== undefined);
+  }
+
+  private finishVoting(): void {
+    this.clearTimers();
+    for (const v of this.votes.values()) {
+      if (v.best !== undefined) this.gallery[v.best].bestVotes++;
+      if (v.worst !== undefined) this.gallery[v.worst].worstVotes++;
+    }
+    // Ties: every top-voted drawing wins.
+    const award = (kind: VoteKind, points: number) => {
+      const counts = this.gallery.map((e) => (kind === 'best' ? e.bestVotes : e.worstVotes));
+      const top = Math.max(...counts);
+      if (top === 0) return;
+      this.gallery.forEach((e, i) => {
+        if (counts[i] !== top) return;
+        e[kind] = true;
+        const drawer = this.player(e.drawerId);
+        if (drawer) drawer.score += points;
+        const pts = points ? ` (${points > 0 ? '+' : ''}${points})` : '';
+        this.system(`${kind === 'best' ? '🏆 Best' : '💩 Worst'} drawing: "${e.word}" by ${e.drawerName}${pts}`);
+      });
+    };
+    if (this.settings.bestVote) award('best', this.settings.bestVotePoints);
+    if (this.settings.worstVote) award('worst', -this.settings.worstVotePoints);
+    this.phase = 'gameEnd';
     this.broadcastState();
   }
 
@@ -380,16 +462,22 @@ export class Room {
     this.broadcastState();
   }
 
-  private pickWords(n: number): string[] {
+  // Choices spread easy → hard (a single choice is medium). Custom words count as medium.
+  private pickWords(n: number): WordChoice[] {
     const custom = [...new Set(this.settings.customWords.split(/[,\n]/).map((w) => w.trim().slice(0, 40)).filter(Boolean))];
-    let pool = this.settings.customWordsOnly && custom.length >= n ? custom : [...DEFAULT_WORDS, ...custom];
-    const fresh = pool.filter((w) => !this.usedWords.has(normalize(w)));
-    if (fresh.length >= n) pool = fresh;
-    else this.usedWords.clear();
-    const picked: string[] = [];
-    const remaining = [...pool];
-    while (picked.length < n && remaining.length > 0) {
-      picked.push(remaining.splice(Math.floor(Math.random() * remaining.length), 1)[0]);
+    const pools: Record<Difficulty, string[]> =
+      this.settings.customWordsOnly && custom.length >= n
+        ? { easy: [], medium: custom, hard: [] }
+        : { easy: WORDS.easy, medium: [...WORDS.medium, ...custom], hard: WORDS.hard };
+    const picked: WordChoice[] = [];
+    for (let i = 0; i < n; i++) {
+      const wanted = n === 1 ? 'medium' : DIFFICULTIES[Math.round((i * 2) / (n - 1))];
+      const difficulty = pools[wanted].length ? wanted : 'medium';
+      const options = pools[difficulty].filter((w) => !picked.some((c) => c.word === w));
+      const fresh = options.filter((w) => !this.usedWords.has(normalize(w)));
+      const from = fresh.length ? fresh : options;
+      if (from.length === 0) break;
+      picked.push({ word: from[Math.floor(Math.random() * from.length)], difficulty });
     }
     return picked;
   }
@@ -427,15 +515,15 @@ export class Room {
       rounds: this.settings.rounds,
       drawerId: this.drawerId,
       hint: this.phase === 'drawing' ? this.mask() : '',
+      difficulty: this.phase === 'drawing' || this.phase === 'turnEnd' ? this.difficulty : '',
       word: wordRevealed ? this.word : '',
       timeLeft: this.phaseEndsAt ? Math.max(0, this.phaseEndsAt - Date.now()) : 0,
       settings: this.settings,
       players: this.players,
       artistAward: this.phase === 'turnEnd' ? this.artistAward : null,
-      gallery:
-        this.phase === 'gameEnd'
-          ? this.gallery.map((e) => ({ drawerName: e.drawerName, word: e.word, image: e.image }))
-          : null,
+      voted: this.phase === 'voting' ? this.players.filter((p) => this.hasVoted(p.id)).map((p) => p.id) : [],
+      // ponytail: resends every image on each vote; send the gallery once if big rooms lag.
+      gallery: this.phase === 'voting' || this.phase === 'gameEnd' ? this.gallery : null,
     });
   }
 }
